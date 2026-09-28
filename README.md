@@ -129,6 +129,11 @@ A Slide server running version 6 can still communicate with version 5, and vice 
 
 This allows protocol behavior to evolve without requiring every node and client in a fleet to update at the same time.
 
+## Shutdown
+
+`slided` handles `SIGINT` and `SIGTERM` by stopping new connections and draining active requests before exiting.
+Connections that stop responding are bounded by the server read timeout.
+
 ## Authentication
 
 Slide is designed around certficate-based auth.  

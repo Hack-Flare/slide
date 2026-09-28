@@ -7,10 +7,16 @@ mod tls;
 use std::env;
 use std::io::{self, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use rustls::{ServerConnection, StreamOwned};
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::iterator::Signals;
 
 use crate::authorization::AuthorizationPolicy;
 use crate::config::NodeConfig;
@@ -27,38 +33,73 @@ fn main() -> io::Result<()> {
         &config.client_ca_path,
     )?;
     let listener = TcpListener::bind(&config.listen_address)?;
+    listener.set_nonblocking(true)?;
     let address = listener.local_addr()?;
     let state = Arc::new(NodeState {
         node_name: config.node_name,
         started_at: std::time::Instant::now(),
     });
     let authorization = Arc::new(AuthorizationPolicy::new(config.status_readers));
+    let shutdown = Arc::new(AtomicBool::new(false));
+    install_shutdown_handler(Arc::clone(&shutdown))?;
+    let mut connections = Vec::new();
 
     println!(
         "slided node '{}' listening with mutual TLS on {address}",
         state.node_name
     );
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
+    while !shutdown.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _peer_address)) => {
                 let tls_config = Arc::clone(&tls_config);
                 let state = Arc::clone(&state);
                 let authorization = Arc::clone(&authorization);
 
-                std::thread::spawn(move || {
+                let connection = std::thread::spawn(move || {
                     if let Err(error) =
                         handle_connection(stream, &tls_config, &state, &authorization)
                     {
                         eprintln!("failed to handle connection: {error}");
                     }
                 });
+                connections.push(connection);
             }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => eprintln!("failed to accept connection: {error}"),
         }
     }
 
+    eprintln!(
+        "shutdown requested, draining {} connections",
+        connections.len()
+    );
+    drain_connections(connections);
+    eprintln!("shutdown complete");
+
     Ok(())
+}
+
+fn install_shutdown_handler(shutdown: Arc<AtomicBool>) -> io::Result<()> {
+    let mut signals = Signals::new([SIGINT, SIGTERM])?;
+    std::thread::spawn(move || {
+        if signals.forever().next().is_some() {
+            shutdown.store(true, Ordering::Relaxed);
+        }
+    });
+
+    Ok(())
+}
+
+fn drain_connections(connections: Vec<JoinHandle<()>>) {
+    for connection in connections {
+        if connection.join().is_err() {
+            eprintln!("connection thread panicked during shutdown");
+        }
+    }
 }
 
 fn handle_connection(
