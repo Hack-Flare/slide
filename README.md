@@ -119,6 +119,16 @@ Requests that do not initiate the Slide protocol recieve a deliberately non-usef
 
 The port number and header name are not security mechanisms. Auth is still handled seperately.
 
+## Protocol version negotiation
+
+Slide protocol versions are negotiated after the TLS handshake.
+A client sends the versions it supports in a `Slide-Versions` header, along with the `connect-me-please` connection header.
+The server selects the highest version supported by both sides and returns it in a `Slide-Version` response header.
+
+A Slide server running version 6 can still communicate with version 5, and vice versa, because a Slide server knows all supported protocol versions and negotiates which version to use over the usually unchanging system protocol.
+
+This allows protocol behavior to evolve without requiring every node and client in a fleet to update at the same time.
+
 ## Authentication
 
 Slide is designed around certficate-based auth.  

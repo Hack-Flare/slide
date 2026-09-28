@@ -8,18 +8,43 @@ const MAX_HEADER_LINE_BYTES: u64 = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_HEADER_COUNT: usize = 64;
 const SLIDE_CONNECTION_TOKEN: &str = "connect-me-please";
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[u16] = &[1];
 
-pub fn read_request(reader: &mut impl BufRead) -> io::Result<Option<String>> {
+pub enum ReadRequest {
+    Accepted(Request),
+    NotSlide,
+    UnsupportedVersion,
+}
+
+pub struct Request {
+    pub method: Method,
+    pub target: Target,
+    pub protocol_version: u16,
+}
+
+pub enum Method {
+    Get,
+    Other,
+}
+
+pub enum Target {
+    Health,
+    Status,
+    Other,
+}
+
+pub fn read_request(reader: &mut impl BufRead) -> io::Result<ReadRequest> {
     let mut request_line = String::new();
     let request_line_bytes = read_line_with_limit(reader, &mut request_line)?;
 
     if request_line_bytes == 0 {
-        return Ok(None);
+        return Ok(ReadRequest::NotSlide);
     }
 
     let mut header_bytes = request_line_bytes;
     let mut header_count = 0;
     let mut slide_handshake = false;
+    let mut client_versions = Vec::new();
 
     loop {
         let mut header_line = String::new();
@@ -45,13 +70,32 @@ pub fn read_request(reader: &mut impl BufRead) -> io::Result<Option<String>> {
                 .split(',')
                 .any(|token| token.trim().eq_ignore_ascii_case(SLIDE_CONNECTION_TOKEN));
         }
+        if let Some((name, value)) = header_line.split_once(':')
+            && name.trim().eq_ignore_ascii_case("slide-versions")
+        {
+            for version in value.split(',') {
+                client_versions.push(version.trim().parse::<u16>().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "invalid Slide-Versions header")
+                })?);
+            }
+        }
     }
 
-    if slide_handshake {
-        Ok(Some(request_line))
-    } else {
-        Ok(None)
+    if !slide_handshake {
+        return Ok(ReadRequest::NotSlide);
     }
+
+    let Some(&protocol_version) = SUPPORTED_PROTOCOL_VERSIONS
+        .iter()
+        .find(|version| client_versions.contains(version))
+    else {
+        return Ok(ReadRequest::UnsupportedVersion);
+    };
+
+    Ok(ReadRequest::Accepted(Request::parse(
+        &request_line,
+        protocol_version,
+    )?))
 }
 
 fn read_line_with_limit(reader: &mut impl BufRead, line: &mut String) -> io::Result<usize> {
@@ -72,25 +116,63 @@ pub struct NodeState {
     pub started_at: Instant,
 }
 
+impl Request {
+    fn parse(request_line: &str, protocol_version: u16) -> io::Result<Self> {
+        let mut parts = request_line.split_whitespace();
+        let method = match parts.next() {
+            Some("GET") => Method::Get,
+            Some(_) => Method::Other,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "request is missing a method",
+                ));
+            }
+        };
+        let target = match parts.next() {
+            Some("/health") => Target::Health,
+            Some("/status") => Target::Status,
+            Some(_) => Target::Other,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "request is missing a target",
+                ));
+            }
+        };
+
+        Ok(Self {
+            method,
+            target,
+            protocol_version,
+        })
+    }
+}
+
 pub fn response_for_request(
-    request_line: &str,
+    request: &Request,
     state: &NodeState,
     client: &AuthenticatedClient,
     policy: &AuthorizationPolicy,
 ) -> String {
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next();
-    let path = parts.next();
-
-    match (method, path) {
-        (Some("GET"), Some("/health")) => http_response(200, "{\"status\":\"ok\"}"),
-        (Some("GET"), Some("/status")) if policy.allows(client, Permission::ReadStatus) => {
-            http_response(200, &status_body(state, client))
+    match (&request.method, &request.target) {
+        (Method::Get, Target::Health) => {
+            http_response(request.protocol_version, 200, "{\"status\":\"ok\"}")
         }
-        (Some("GET"), Some("/status")) => http_response(403, "{\"error\":\"forbidden\"}"),
-        (Some("GET"), Some(_)) => http_response(404, "{\"error\":\"not found\"}"),
-        (Some(_), Some(_)) => http_response(405, "{\"error\":\"method not allowed\"}"),
-        _ => http_response(400, "{\"error\":\"bad request\"}"),
+        (Method::Get, Target::Status) if policy.allows(client, Permission::ReadStatus) => {
+            http_response(request.protocol_version, 200, &status_body(state, client))
+        }
+        (Method::Get, Target::Status) => {
+            http_response(request.protocol_version, 403, "{\"error\":\"forbidden\"}")
+        }
+        (Method::Get, Target::Other) => {
+            http_response(request.protocol_version, 404, "{\"error\":\"not found\"}")
+        }
+        (Method::Other, _) => http_response(
+            request.protocol_version,
+            405,
+            "{\"error\":\"method not allowed\"}",
+        ),
     }
 }
 
@@ -103,7 +185,19 @@ fn status_body(state: &NodeState, client: &AuthenticatedClient) -> String {
     )
 }
 
-fn http_response(status: u16, body: &str) -> String {
+pub fn unsupported_version_response() -> String {
+    let supported_versions = SUPPORTED_PROTOCOL_VERSIONS
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "HTTP/1.1 426 Upgrade Required\r\nSlide-Versions: {supported_versions}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+}
+
+fn http_response(protocol_version: u16, status: u16, body: &str) -> String {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -114,7 +208,7 @@ fn http_response(status: u16, body: &str) -> String {
     };
 
     format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status} {reason}\r\nSlide-Version: {protocol_version}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
 }
@@ -140,28 +234,55 @@ mod tests {
         AuthorizationPolicy::new(["test-fingerprint".to_owned()])
     }
 
+    fn request(method: Method, target: Target) -> Request {
+        Request {
+            method,
+            target,
+            protocol_version: 1,
+        }
+    }
+
     #[test]
     fn slide_handshake_is_required() {
         let mut request = std::io::Cursor::new(
-            b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: connect-me-please\r\n\r\n",
+            b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: connect-me-please\r\nSlide-Versions: 1\r\n\r\n",
         );
 
-        let request_line = read_request(&mut request).expect("valid request");
+        let request = read_request(&mut request).expect("valid request");
 
-        assert_eq!(request_line.as_deref(), Some("GET /health HTTP/1.1\r\n"));
+        assert!(matches!(request, ReadRequest::Accepted(_)));
     }
 
     #[test]
     fn ordinary_http_is_not_a_slide_request() {
         let mut request = std::io::Cursor::new(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n");
 
-        assert!(read_request(&mut request).expect("valid request").is_none());
+        assert!(matches!(
+            read_request(&mut request).expect("valid request"),
+            ReadRequest::NotSlide
+        ));
+    }
+
+    #[test]
+    fn unsupported_version_is_rejected() {
+        let mut request = std::io::Cursor::new(
+            b"GET /health HTTP/1.1\r\nConnection: connect-me-please\r\nSlide-Versions: 2\r\n\r\n",
+        );
+
+        assert!(matches!(
+            read_request(&mut request).expect("valid request"),
+            ReadRequest::UnsupportedVersion
+        ));
     }
 
     #[test]
     fn health_endpoint_returns_ok() {
-        let response =
-            response_for_request("GET /health HTTP/1.1\r\n", &state(), &client(), &policy());
+        let response = response_for_request(
+            &request(Method::Get, Target::Health),
+            &state(),
+            &client(),
+            &policy(),
+        );
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.ends_with("{\"status\":\"ok\"}"));
@@ -169,8 +290,12 @@ mod tests {
 
     #[test]
     fn status_endpoint_includes_node_name() {
-        let response =
-            response_for_request("GET /status HTTP/1.1\r\n", &state(), &client(), &policy());
+        let response = response_for_request(
+            &request(Method::Get, Target::Status),
+            &state(),
+            &client(),
+            &policy(),
+        );
 
         assert!(response.contains("\"node_name\":\"test-node\""));
         assert!(response.contains("\"uptime_seconds\":"));
@@ -179,8 +304,12 @@ mod tests {
 
     #[test]
     fn unknown_path_returns_not_found() {
-        let response =
-            response_for_request("GET /missing HTTP/1.1\r\n", &state(), &client(), &policy());
+        let response = response_for_request(
+            &request(Method::Get, Target::Other),
+            &state(),
+            &client(),
+            &policy(),
+        );
 
         assert!(response.starts_with("HTTP/1.1 404 Not Found"));
     }
@@ -190,8 +319,12 @@ mod tests {
         let client = AuthenticatedClient {
             certificate_fingerprint: "unknown-client".to_owned(),
         };
-        let response =
-            response_for_request("GET /status HTTP/1.1\r\n", &state(), &client, &policy());
+        let response = response_for_request(
+            &request(Method::Get, Target::Status),
+            &state(),
+            &client,
+            &policy(),
+        );
 
         assert!(response.starts_with("HTTP/1.1 403 Forbidden"));
     }

@@ -15,7 +15,9 @@ use rustls::{ServerConnection, StreamOwned};
 use crate::authorization::AuthorizationPolicy;
 use crate::config::NodeConfig;
 use crate::identity::from_connection;
-use crate::protocol::{NodeState, read_request, response_for_request};
+use crate::protocol::{
+    NodeState, ReadRequest, read_request, response_for_request, unsupported_version_response,
+};
 
 fn main() -> io::Result<()> {
     let config = NodeConfig::from_args(env::args().skip(1))?;
@@ -75,10 +77,15 @@ fn handle_connection(
     stream.conn.complete_io(&mut stream.sock)?;
     let client = from_connection(&stream.conn)?;
     let mut reader = BufReader::new(&mut stream);
-    let Some(request_line) = read_request(&mut reader)? else {
-        return Ok(());
+    let request = match read_request(&mut reader)? {
+        ReadRequest::Accepted(request) => request,
+        ReadRequest::NotSlide => return Ok(()),
+        ReadRequest::UnsupportedVersion => {
+            stream.write_all(unsupported_version_response().as_bytes())?;
+            return stream.flush();
+        }
     };
-    let response = response_for_request(&request_line, state, &client, authorization);
+    let response = response_for_request(&request, state, &client, authorization);
     stream.write_all(response.as_bytes())?;
     stream.flush()
 }
