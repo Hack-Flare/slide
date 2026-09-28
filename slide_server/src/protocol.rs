@@ -1,7 +1,71 @@
+use std::io::{self, BufRead, Read};
 use std::time::Instant;
 
 use crate::authorization::{AuthorizationPolicy, Permission};
 use crate::identity::AuthenticatedClient;
+
+const MAX_HEADER_LINE_BYTES: u64 = 8 * 1024;
+const MAX_HEADER_BYTES: usize = 32 * 1024;
+const MAX_HEADER_COUNT: usize = 64;
+const SLIDE_CONNECTION_TOKEN: &str = "connect-me-please";
+
+pub fn read_request(reader: &mut impl BufRead) -> io::Result<Option<String>> {
+    let mut request_line = String::new();
+    let request_line_bytes = read_line_with_limit(reader, &mut request_line)?;
+
+    if request_line_bytes == 0 {
+        return Ok(None);
+    }
+
+    let mut header_bytes = request_line_bytes;
+    let mut header_count = 0;
+    let mut slide_handshake = false;
+
+    loop {
+        let mut header_line = String::new();
+        let line_bytes = read_line_with_limit(reader, &mut header_line)?;
+
+        if line_bytes == 0 || header_line == "\r\n" || header_line == "\n" {
+            break;
+        }
+
+        header_count += 1;
+        header_bytes += line_bytes;
+        if header_count > MAX_HEADER_COUNT || header_bytes > MAX_HEADER_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "request headers are too large",
+            ));
+        }
+
+        if let Some((name, value)) = header_line.split_once(':')
+            && name.trim().eq_ignore_ascii_case("connection")
+        {
+            slide_handshake = value
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case(SLIDE_CONNECTION_TOKEN));
+        }
+    }
+
+    if slide_handshake {
+        Ok(Some(request_line))
+    } else {
+        Ok(None)
+    }
+}
+
+fn read_line_with_limit(reader: &mut impl BufRead, line: &mut String) -> io::Result<usize> {
+    let bytes_read = reader.take(MAX_HEADER_LINE_BYTES + 1).read_line(line)?;
+
+    if bytes_read > MAX_HEADER_LINE_BYTES as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "request header line is too large",
+        ));
+    }
+
+    Ok(bytes_read)
+}
 
 pub struct NodeState {
     pub node_name: String,
@@ -74,6 +138,24 @@ mod tests {
 
     fn policy() -> AuthorizationPolicy {
         AuthorizationPolicy::new(["test-fingerprint".to_owned()])
+    }
+
+    #[test]
+    fn slide_handshake_is_required() {
+        let mut request = std::io::Cursor::new(
+            b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: connect-me-please\r\n\r\n",
+        );
+
+        let request_line = read_request(&mut request).expect("valid request");
+
+        assert_eq!(request_line.as_deref(), Some("GET /health HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn ordinary_http_is_not_a_slide_request() {
+        let mut request = std::io::Cursor::new(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n");
+
+        assert!(read_request(&mut request).expect("valid request").is_none());
     }
 
     #[test]

@@ -5,7 +5,7 @@ mod protocol;
 mod tls;
 
 use std::env;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,9 +15,7 @@ use rustls::{ServerConnection, StreamOwned};
 use crate::authorization::AuthorizationPolicy;
 use crate::config::NodeConfig;
 use crate::identity::from_connection;
-use crate::protocol::{NodeState, response_for_request};
-
-const MAX_REQUEST_LINE_BYTES: u64 = 8 * 1024;
+use crate::protocol::{NodeState, read_request, response_for_request};
 
 fn main() -> io::Result<()> {
     let config = NodeConfig::from_args(env::args().skip(1))?;
@@ -76,18 +74,11 @@ fn handle_connection(
 
     stream.conn.complete_io(&mut stream.sock)?;
     let client = from_connection(&stream.conn)?;
-    let (request_line, request_line_too_large) = {
-        let mut request_line = String::new();
-        let bytes_read = BufReader::new(&mut stream)
-            .take(MAX_REQUEST_LINE_BYTES + 1)
-            .read_line(&mut request_line)?;
-        (request_line, bytes_read > MAX_REQUEST_LINE_BYTES as usize)
+    let mut reader = BufReader::new(&mut stream);
+    let Some(request_line) = read_request(&mut reader)? else {
+        return Ok(());
     };
-    let response = if request_line_too_large {
-        response_for_request("", state, &client, authorization)
-    } else {
-        response_for_request(&request_line, state, &client, authorization)
-    };
+    let response = response_for_request(&request_line, state, &client, authorization);
     stream.write_all(response.as_bytes())?;
     stream.flush()
 }
