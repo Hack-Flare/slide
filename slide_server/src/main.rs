@@ -5,8 +5,9 @@ mod protocol;
 mod tls;
 
 use std::env;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rustls::{ServerConnection, StreamOwned};
@@ -15,6 +16,8 @@ use crate::authorization::AuthorizationPolicy;
 use crate::config::NodeConfig;
 use crate::identity::from_connection;
 use crate::protocol::{NodeState, response_for_request};
+
+const MAX_REQUEST_LINE_BYTES: u64 = 8 * 1024;
 
 fn main() -> io::Result<()> {
     let config = NodeConfig::from_args(env::args().skip(1))?;
@@ -25,11 +28,11 @@ fn main() -> io::Result<()> {
     )?;
     let listener = TcpListener::bind(&config.listen_address)?;
     let address = listener.local_addr()?;
-    let state = NodeState {
+    let state = Arc::new(NodeState {
         node_name: config.node_name,
         started_at: std::time::Instant::now(),
-    };
-    let authorization = AuthorizationPolicy::new(config.status_readers);
+    });
+    let authorization = Arc::new(AuthorizationPolicy::new(config.status_readers));
 
     println!(
         "slided node '{}' listening with mutual TLS on {address}",
@@ -39,9 +42,17 @@ fn main() -> io::Result<()> {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(error) = handle_connection(stream, &tls_config, &state, &authorization) {
-                    eprintln!("failed to handle connection: {error}");
-                }
+                let tls_config = Arc::clone(&tls_config);
+                let state = Arc::clone(&state);
+                let authorization = Arc::clone(&authorization);
+
+                std::thread::spawn(move || {
+                    if let Err(error) =
+                        handle_connection(stream, &tls_config, &state, &authorization)
+                    {
+                        eprintln!("failed to handle connection: {error}");
+                    }
+                });
             }
             Err(error) => eprintln!("failed to accept connection: {error}"),
         }
@@ -52,9 +63,9 @@ fn main() -> io::Result<()> {
 
 fn handle_connection(
     stream: TcpStream,
-    tls_config: &std::sync::Arc<rustls::ServerConfig>,
-    state: &NodeState,
-    authorization: &AuthorizationPolicy,
+    tls_config: &Arc<rustls::ServerConfig>,
+    state: &Arc<NodeState>,
+    authorization: &Arc<AuthorizationPolicy>,
 ) -> io::Result<()> {
     let connection = ServerConnection::new(tls_config.clone())
         .map_err(|error| io::Error::other(format!("failed to create TLS connection: {error}")))?;
@@ -65,9 +76,18 @@ fn handle_connection(
 
     stream.conn.complete_io(&mut stream.sock)?;
     let client = from_connection(&stream.conn)?;
-    let mut request_line = String::new();
-    BufReader::new(&mut stream).read_line(&mut request_line)?;
-    let response = response_for_request(&request_line, state, &client, authorization);
+    let (request_line, request_line_too_large) = {
+        let mut request_line = String::new();
+        let bytes_read = BufReader::new(&mut stream)
+            .take(MAX_REQUEST_LINE_BYTES + 1)
+            .read_line(&mut request_line)?;
+        (request_line, bytes_read > MAX_REQUEST_LINE_BYTES as usize)
+    };
+    let response = if request_line_too_large {
+        response_for_request("", state, &client, authorization)
+    } else {
+        response_for_request(&request_line, state, &client, authorization)
+    };
     stream.write_all(response.as_bytes())?;
     stream.flush()
 }
