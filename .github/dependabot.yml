@@ -1,0 +1,31 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 20
+    groups:
+      all-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: cargo
+    directory: "/slide_client"
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 20
+    groups:
+      slide_client:
+        patterns:
+          - "*"
+
+  - package-ecosystem: cargo
+    directory: "/slide_server"
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 20
+    groups:
+      slide_server:
+        patterns:
+          - "*"
