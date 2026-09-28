@@ -1,6 +1,9 @@
-[package]
-name = "slide"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "3"
+members = [
+  "slide_client",
+  "slide_server"
+]
 
-[dependencies]
+[workspace.lints.clippy]
+unwrap_used = "deny"
