@@ -9,7 +9,7 @@ Instead of running a heavy control plane, each server runs a tiny privileged dae
 
 A Slide client can discover every server in a fleet, authenticate to them, deploy services, restart instances, manage rolling releases, inspect state, and update any coniguration.
 
-> ![IMPORTANT]
+> [!IMPORTANT]  
 > Slide is currently in early design and development. It is for a future Hackflare strategy.
 
 ## Goals
