@@ -1,5 +1,6 @@
 mod authorization;
 mod config;
+mod database;
 mod identity;
 mod protocol;
 mod tls;
@@ -27,6 +28,8 @@ use crate::protocol::{
 
 fn main() -> io::Result<()> {
     let config = NodeConfig::from_args(env::args().skip(1))?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let identity = runtime.block_on(database::open(&config.node_name))?;
     let tls_config = tls::load_server_config(
         &config.certificate_path,
         &config.private_key_path,
@@ -36,7 +39,8 @@ fn main() -> io::Result<()> {
     listener.set_nonblocking(true)?;
     let address = listener.local_addr()?;
     let state = Arc::new(NodeState {
-        node_name: config.node_name,
+        node_id: identity.node_id,
+        node_name: identity.node_name,
         started_at: std::time::Instant::now(),
     });
     let authorization = Arc::new(AuthorizationPolicy::new(config.status_readers));

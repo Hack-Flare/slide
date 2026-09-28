@@ -134,6 +134,7 @@ fn read_line_with_limit(reader: &mut impl BufRead, line: &mut String) -> io::Res
 }
 
 pub struct NodeState {
+    pub node_id: String,
     pub node_name: String,
     pub started_at: Instant,
 }
@@ -195,6 +196,7 @@ pub fn response_for_request(
                 request,
                 200,
                 ResponseBody::Status {
+                    node_id: state.node_id.clone(),
                     node_name: state.node_name.clone(),
                     uptime_seconds: state.started_at.elapsed().as_secs(),
                     client_certificate_fingerprint: client.certificate_fingerprint.clone(),
@@ -232,6 +234,7 @@ enum ResponseBody {
         status: String,
     },
     Status {
+        node_id: String,
         node_name: String,
         uptime_seconds: u64,
         client_certificate_fingerprint: String,
@@ -316,6 +319,7 @@ mod tests {
 
     fn state() -> NodeState {
         NodeState {
+            node_id: "test-id".to_owned(),
             node_name: "test-node".to_owned(),
             started_at: Instant::now(),
         }
@@ -398,6 +402,7 @@ mod tests {
         .expect("response serializes");
 
         assert!(response.contains("\"type\":\"status\""));
+        assert!(response.contains("\"node_id\":\"test-id\""));
         assert!(response.contains("\"node_name\":\"test-node\""));
         assert!(response.contains("\"uptime_seconds\":"));
         assert!(response.contains("\"client_certificate_fingerprint\":\"test-fingerprint\""));
