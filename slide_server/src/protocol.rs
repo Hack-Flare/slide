@@ -1,6 +1,8 @@
 use std::io::{self, BufRead, Read};
 use std::time::Instant;
 
+use serde::Serialize;
+
 use crate::authorization::{AuthorizationPolicy, Permission};
 use crate::identity::AuthenticatedClient;
 
@@ -20,6 +22,7 @@ pub struct Request {
     pub method: Method,
     pub target: Target,
     pub protocol_version: u16,
+    pub request_id: Option<String>,
 }
 
 pub enum Method {
@@ -45,6 +48,7 @@ pub fn read_request(reader: &mut impl BufRead) -> io::Result<ReadRequest> {
     let mut header_count = 0;
     let mut slide_handshake = false;
     let mut client_versions = Vec::new();
+    let mut request_id = None;
 
     loop {
         let mut header_line = String::new();
@@ -79,6 +83,23 @@ pub fn read_request(reader: &mut impl BufRead) -> io::Result<ReadRequest> {
                 })?);
             }
         }
+        if let Some((name, value)) = header_line.split_once(':')
+            && name.trim().eq_ignore_ascii_case("slide-request-id")
+        {
+            let value = value.trim();
+            if value.is_empty()
+                || value.len() > 128
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid Slide-Request-Id header",
+                ));
+            }
+            request_id = Some(value.to_owned());
+        }
     }
 
     if !slide_handshake {
@@ -95,6 +116,7 @@ pub fn read_request(reader: &mut impl BufRead) -> io::Result<ReadRequest> {
     Ok(ReadRequest::Accepted(Request::parse(
         &request_line,
         protocol_version,
+        request_id,
     )?))
 }
 
@@ -117,7 +139,11 @@ pub struct NodeState {
 }
 
 impl Request {
-    fn parse(request_line: &str, protocol_version: u16) -> io::Result<Self> {
+    fn parse(
+        request_line: &str,
+        protocol_version: u16,
+        request_id: Option<String>,
+    ) -> io::Result<Self> {
         let mut parts = request_line.split_whitespace();
         let method = match parts.next() {
             Some("GET") => Method::Get,
@@ -145,6 +171,7 @@ impl Request {
             method,
             target,
             protocol_version,
+            request_id,
         })
     }
 }
@@ -154,50 +181,112 @@ pub fn response_for_request(
     state: &NodeState,
     client: &AuthenticatedClient,
     policy: &AuthorizationPolicy,
-) -> String {
+) -> io::Result<String> {
     match (&request.method, &request.target) {
-        (Method::Get, Target::Health) => {
-            http_response(request.protocol_version, 200, "{\"status\":\"ok\"}")
-        }
+        (Method::Get, Target::Health) => http_response(
+            request,
+            200,
+            ResponseBody::Health {
+                status: "ok".to_owned(),
+            },
+        ),
         (Method::Get, Target::Status) if policy.allows(client, Permission::ReadStatus) => {
-            http_response(request.protocol_version, 200, &status_body(state, client))
+            http_response(
+                request,
+                200,
+                ResponseBody::Status {
+                    node_name: state.node_name.clone(),
+                    uptime_seconds: state.started_at.elapsed().as_secs(),
+                    client_certificate_fingerprint: client.certificate_fingerprint.clone(),
+                },
+            )
         }
-        (Method::Get, Target::Status) => {
-            http_response(request.protocol_version, 403, "{\"error\":\"forbidden\"}")
-        }
-        (Method::Get, Target::Other) => {
-            http_response(request.protocol_version, 404, "{\"error\":\"not found\"}")
-        }
+        (Method::Get, Target::Status) => http_response(
+            request,
+            403,
+            ResponseBody::Error {
+                error: ProtocolError::new(ErrorCode::Forbidden, "client is not authorized"),
+            },
+        ),
+        (Method::Get, Target::Other) => http_response(
+            request,
+            404,
+            ResponseBody::Error {
+                error: ProtocolError::new(ErrorCode::NotFound, "request target was not found"),
+            },
+        ),
         (Method::Other, _) => http_response(
-            request.protocol_version,
+            request,
             405,
-            "{\"error\":\"method not allowed\"}",
+            ResponseBody::Error {
+                error: ProtocolError::new(ErrorCode::MethodNotAllowed, "method is not allowed"),
+            },
         ),
     }
 }
 
-fn status_body(state: &NodeState, client: &AuthenticatedClient) -> String {
-    format!(
-        "{{\"node_name\":\"{}\",\"uptime_seconds\":{},\"client_certificate_fingerprint\":\"{}\"}}",
-        state.node_name,
-        state.started_at.elapsed().as_secs(),
-        client.certificate_fingerprint
-    )
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+enum ResponseBody {
+    Health {
+        status: String,
+    },
+    Status {
+        node_name: String,
+        uptime_seconds: u64,
+        client_certificate_fingerprint: String,
+    },
+    Error {
+        error: ProtocolError,
+    },
 }
 
-pub fn unsupported_version_response() -> String {
+#[derive(Serialize)]
+struct ProtocolError {
+    code: ErrorCode,
+    message: String,
+}
+
+impl ProtocolError {
+    fn new(code: ErrorCode, message: &str) -> Self {
+        Self {
+            code,
+            message: message.to_owned(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ErrorCode {
+    Forbidden,
+    MethodNotAllowed,
+    NotFound,
+    UnsupportedVersion,
+}
+
+pub fn unsupported_version_response() -> io::Result<String> {
     let supported_versions = SUPPORTED_PROTOCOL_VERSIONS
         .iter()
         .map(u16::to_string)
         .collect::<Vec<_>>()
         .join(", ");
 
-    format!(
-        "HTTP/1.1 426 Upgrade Required\r\nSlide-Versions: {supported_versions}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    )
+    let body = serde_json::to_string(&ResponseBody::Error {
+        error: ProtocolError::new(
+            ErrorCode::UnsupportedVersion,
+            "no mutually supported protocol version",
+        ),
+    })
+    .map_err(io::Error::other)?;
+
+    Ok(format!(
+        "HTTP/1.1 426 Upgrade Required\r\nSlide-Versions: {supported_versions}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    ))
 }
 
-fn http_response(protocol_version: u16, status: u16, body: &str) -> String {
+fn http_response(request: &Request, status: u16, body: ResponseBody) -> io::Result<String> {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -207,10 +296,18 @@ fn http_response(protocol_version: u16, status: u16, body: &str) -> String {
         _ => "Unknown",
     };
 
-    format!(
-        "HTTP/1.1 {status} {reason}\r\nSlide-Version: {protocol_version}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+    let body = serde_json::to_string(&body).map_err(io::Error::other)?;
+    let request_id = request
+        .request_id
+        .as_deref()
+        .map(|request_id| format!("Slide-Request-Id: {request_id}\r\n"))
+        .unwrap_or_default();
+
+    Ok(format!(
+        "HTTP/1.1 {status} {reason}\r\nSlide-Version: {}\r\n{request_id}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        request.protocol_version,
         body.len()
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -239,6 +336,7 @@ mod tests {
             method,
             target,
             protocol_version: 1,
+            request_id: None,
         }
     }
 
@@ -282,10 +380,11 @@ mod tests {
             &state(),
             &client(),
             &policy(),
-        );
+        )
+        .expect("response serializes");
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.ends_with("{\"status\":\"ok\"}"));
+        assert!(response.ends_with("{\"type\":\"health\",\"status\":\"ok\"}"));
     }
 
     #[test]
@@ -295,8 +394,10 @@ mod tests {
             &state(),
             &client(),
             &policy(),
-        );
+        )
+        .expect("response serializes");
 
+        assert!(response.contains("\"type\":\"status\""));
         assert!(response.contains("\"node_name\":\"test-node\""));
         assert!(response.contains("\"uptime_seconds\":"));
         assert!(response.contains("\"client_certificate_fingerprint\":\"test-fingerprint\""));
@@ -309,7 +410,8 @@ mod tests {
             &state(),
             &client(),
             &policy(),
-        );
+        )
+        .expect("response serializes");
 
         assert!(response.starts_with("HTTP/1.1 404 Not Found"));
     }
@@ -324,8 +426,23 @@ mod tests {
             &state(),
             &client,
             &policy(),
-        );
+        )
+        .expect("response serializes");
 
         assert!(response.starts_with("HTTP/1.1 403 Forbidden"));
+    }
+
+    #[test]
+    fn request_id_is_returned_in_response() {
+        let request = Request {
+            method: Method::Get,
+            target: Target::Health,
+            protocol_version: 1,
+            request_id: Some("request-123".to_owned()),
+        };
+        let response = response_for_request(&request, &state(), &client(), &policy())
+            .expect("response serializes");
+
+        assert!(response.contains("Slide-Request-Id: request-123\r\n"));
     }
 }

@@ -81,11 +81,11 @@ fn handle_connection(
         ReadRequest::Accepted(request) => request,
         ReadRequest::NotSlide => return Ok(()),
         ReadRequest::UnsupportedVersion => {
-            stream.write_all(unsupported_version_response().as_bytes())?;
+            stream.write_all(unsupported_version_response()?.as_bytes())?;
             return stream.flush();
         }
     };
-    let response = response_for_request(&request, state, &client, authorization);
+    let response = response_for_request(&request, state, &client, authorization)?;
     stream.write_all(response.as_bytes())?;
     stream.flush()
 }
