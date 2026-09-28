@@ -1,4 +1,5 @@
 mod config;
+mod identity;
 mod protocol;
 mod tls;
 
@@ -10,6 +11,7 @@ use std::time::Duration;
 use rustls::{ServerConnection, StreamOwned};
 
 use crate::config::NodeConfig;
+use crate::identity::from_connection;
 use crate::protocol::{NodeState, response_for_request};
 
 fn main() -> io::Result<()> {
@@ -57,9 +59,11 @@ fn handle_connection(
         .get_mut()
         .set_read_timeout(Some(Duration::from_secs(5)))?;
 
+    stream.conn.complete_io(&mut stream.sock)?;
+    let client = from_connection(&stream.conn)?;
     let mut request_line = String::new();
     BufReader::new(&mut stream).read_line(&mut request_line)?;
-    let response = response_for_request(&request_line, state);
+    let response = response_for_request(&request_line, state, &client);
     stream.write_all(response.as_bytes())?;
     stream.flush()
 }
