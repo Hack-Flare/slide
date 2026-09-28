@@ -1,0 +1,17 @@
+server:
+  - changed-files:
+      - any-glob-to-any-file: slide_server/**/*
+
+client:
+  - changed-files:
+      - any-glob-to-any-file: slide_client/**/*  
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: .github/**/*
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - Cargo.lock
+          - Cargo.toml
