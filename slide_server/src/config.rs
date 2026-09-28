@@ -11,6 +11,7 @@ pub struct NodeConfig {
     pub certificate_path: PathBuf,
     pub private_key_path: PathBuf,
     pub client_ca_path: PathBuf,
+    pub status_readers: Vec<String>,
 }
 
 impl NodeConfig {
@@ -20,6 +21,7 @@ impl NodeConfig {
         let mut certificate_path = None;
         let mut private_key_path = None;
         let mut client_ca_path = None;
+        let mut status_readers = Vec::new();
         let mut dev_mode = false;
         let mut args = args.peekable();
 
@@ -31,6 +33,11 @@ impl NodeConfig {
                 "--cert" => certificate_path = Some(next_path(&mut args, "--cert")?),
                 "--key" => private_key_path = Some(next_path(&mut args, "--key")?),
                 "--client-ca" => client_ca_path = Some(next_path(&mut args, "--client-ca")?),
+                "--allow-client" => {
+                    let fingerprint = next_argument(&mut args, "--allow-client")?;
+                    crate::authorization::validate_fingerprint(&fingerprint)?;
+                    status_readers.push(fingerprint);
+                }
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -63,6 +70,7 @@ impl NodeConfig {
             certificate_path: required_path(certificate_path, "--cert")?,
             private_key_path: required_path(private_key_path, "--key")?,
             client_ca_path: required_path(client_ca_path, "--client-ca")?,
+            status_readers,
         })
     }
 }
@@ -97,7 +105,9 @@ fn print_help() {
          TLS options:\n\
            --cert PATH       Server certificate chain in PEM format\n\
            --key PATH        Server private key in PEM format\n\
-           --client-ca PATH  CA certificate for verifying client certificates"
+           --client-ca PATH  CA certificate for verifying client certificates\n\
+         Authorization options:\n\
+           --allow-client FINGERPRINT  Grant status read access"
     );
 }
 

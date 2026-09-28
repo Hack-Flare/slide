@@ -1,3 +1,4 @@
+mod authorization;
 mod config;
 mod identity;
 mod protocol;
@@ -10,6 +11,7 @@ use std::time::Duration;
 
 use rustls::{ServerConnection, StreamOwned};
 
+use crate::authorization::AuthorizationPolicy;
 use crate::config::NodeConfig;
 use crate::identity::from_connection;
 use crate::protocol::{NodeState, response_for_request};
@@ -27,6 +29,7 @@ fn main() -> io::Result<()> {
         node_name: config.node_name,
         started_at: std::time::Instant::now(),
     };
+    let authorization = AuthorizationPolicy::new(config.status_readers);
 
     println!(
         "slided node '{}' listening with mutual TLS on {address}",
@@ -36,7 +39,7 @@ fn main() -> io::Result<()> {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(error) = handle_connection(stream, &tls_config, &state) {
+                if let Err(error) = handle_connection(stream, &tls_config, &state, &authorization) {
                     eprintln!("failed to handle connection: {error}");
                 }
             }
@@ -51,6 +54,7 @@ fn handle_connection(
     stream: TcpStream,
     tls_config: &std::sync::Arc<rustls::ServerConfig>,
     state: &NodeState,
+    authorization: &AuthorizationPolicy,
 ) -> io::Result<()> {
     let connection = ServerConnection::new(tls_config.clone())
         .map_err(|error| io::Error::other(format!("failed to create TLS connection: {error}")))?;
@@ -63,7 +67,7 @@ fn handle_connection(
     let client = from_connection(&stream.conn)?;
     let mut request_line = String::new();
     BufReader::new(&mut stream).read_line(&mut request_line)?;
-    let response = response_for_request(&request_line, state, &client);
+    let response = response_for_request(&request_line, state, &client, authorization);
     stream.write_all(response.as_bytes())?;
     stream.flush()
 }
