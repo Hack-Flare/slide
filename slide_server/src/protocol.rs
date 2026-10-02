@@ -4,6 +4,7 @@ use std::time::Instant;
 use serde::Serialize;
 
 use crate::authorization::{AuthorizationPolicy, Permission};
+use crate::database::NodeIdentity;
 use crate::identity::AuthenticatedClient;
 
 const MAX_HEADER_LINE_BYTES: u64 = 8 * 1024;
@@ -134,8 +135,6 @@ fn read_line_with_limit(reader: &mut impl BufRead, line: &mut String) -> io::Res
 }
 
 pub struct NodeState {
-    pub node_id: String,
-    pub node_name: String,
     pub started_at: Instant,
 }
 
@@ -180,6 +179,7 @@ impl Request {
 pub fn response_for_request(
     request: &Request,
     state: &NodeState,
+    identity: &NodeIdentity,
     client: &AuthenticatedClient,
     policy: &AuthorizationPolicy,
 ) -> io::Result<String> {
@@ -196,8 +196,8 @@ pub fn response_for_request(
                 request,
                 200,
                 ResponseBody::Status {
-                    node_id: state.node_id.clone(),
-                    node_name: state.node_name.clone(),
+                    node_id: identity.node_id.clone(),
+                    node_name: identity.node_name.clone(),
                     uptime_seconds: state.started_at.elapsed().as_secs(),
                     client_certificate_fingerprint: client.certificate_fingerprint.clone(),
                 },
@@ -319,9 +319,14 @@ mod tests {
 
     fn state() -> NodeState {
         NodeState {
+            started_at: Instant::now(),
+        }
+    }
+
+    fn identity() -> NodeIdentity {
+        NodeIdentity {
             node_id: "test-id".to_owned(),
             node_name: "test-node".to_owned(),
-            started_at: Instant::now(),
         }
     }
 
@@ -382,6 +387,7 @@ mod tests {
         let response = response_for_request(
             &request(Method::Get, Target::Health),
             &state(),
+            &identity(),
             &client(),
             &policy(),
         )
@@ -396,6 +402,7 @@ mod tests {
         let response = response_for_request(
             &request(Method::Get, Target::Status),
             &state(),
+            &identity(),
             &client(),
             &policy(),
         )
@@ -413,6 +420,7 @@ mod tests {
         let response = response_for_request(
             &request(Method::Get, Target::Other),
             &state(),
+            &identity(),
             &client(),
             &policy(),
         )
@@ -429,6 +437,7 @@ mod tests {
         let response = response_for_request(
             &request(Method::Get, Target::Status),
             &state(),
+            &identity(),
             &client,
             &policy(),
         )
@@ -445,7 +454,7 @@ mod tests {
             protocol_version: 1,
             request_id: Some("request-123".to_owned()),
         };
-        let response = response_for_request(&request, &state(), &client(), &policy())
+        let response = response_for_request(&request, &state(), &identity(), &client(), &policy())
             .expect("response serializes");
 
         assert!(response.contains("Slide-Request-Id: request-123\r\n"));

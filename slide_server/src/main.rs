@@ -29,7 +29,9 @@ use crate::protocol::{
 fn main() -> io::Result<()> {
     let config = NodeConfig::from_args(env::args().skip(1))?;
     let runtime = tokio::runtime::Runtime::new()?;
-    let identity = runtime.block_on(database::open(&config.node_name))?;
+    let repository =
+        Arc::new(runtime.block_on(database::NodeStateRepository::open(&config.node_name))?);
+    let runtime_handle = runtime.handle().clone();
     let tls_config = tls::load_server_config(
         &config.certificate_path,
         &config.private_key_path,
@@ -39,8 +41,6 @@ fn main() -> io::Result<()> {
     listener.set_nonblocking(true)?;
     let address = listener.local_addr()?;
     let state = Arc::new(NodeState {
-        node_id: identity.node_id,
-        node_name: identity.node_name,
         started_at: std::time::Instant::now(),
     });
     let authorization = Arc::new(AuthorizationPolicy::new(config.status_readers));
@@ -50,7 +50,7 @@ fn main() -> io::Result<()> {
 
     println!(
         "slided node '{}' listening with mutual TLS on {address}",
-        state.node_name
+        config.node_name
     );
 
     while !shutdown.load(Ordering::Relaxed) {
@@ -59,11 +59,18 @@ fn main() -> io::Result<()> {
                 let tls_config = Arc::clone(&tls_config);
                 let state = Arc::clone(&state);
                 let authorization = Arc::clone(&authorization);
+                let repository = Arc::clone(&repository);
+                let runtime_handle = runtime_handle.clone();
 
                 let connection = std::thread::spawn(move || {
-                    if let Err(error) =
-                        handle_connection(stream, &tls_config, &state, &authorization)
-                    {
+                    if let Err(error) = handle_connection(
+                        stream,
+                        &tls_config,
+                        &state,
+                        &authorization,
+                        &repository,
+                        &runtime_handle,
+                    ) {
                         eprintln!("failed to handle connection: {error}");
                     }
                 });
@@ -111,6 +118,8 @@ fn handle_connection(
     tls_config: &Arc<rustls::ServerConfig>,
     state: &Arc<NodeState>,
     authorization: &Arc<AuthorizationPolicy>,
+    repository: &Arc<database::NodeStateRepository>,
+    runtime_handle: &tokio::runtime::Handle,
 ) -> io::Result<()> {
     let connection = ServerConnection::new(tls_config.clone())
         .map_err(|error| io::Error::other(format!("failed to create TLS connection: {error}")))?;
@@ -130,7 +139,8 @@ fn handle_connection(
             return stream.flush();
         }
     };
-    let response = response_for_request(&request, state, &client, authorization)?;
+    let identity = runtime_handle.block_on(repository.node_identity())?;
+    let response = response_for_request(&request, state, &identity, &client, authorization)?;
     stream.write_all(response.as_bytes())?;
     stream.flush()
 }
