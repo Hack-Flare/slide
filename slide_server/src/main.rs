@@ -15,16 +15,16 @@ use signal_hook::iterator::Signals;
 use slide_server::authorization::AuthorizationPolicy;
 use slide_server::config::NodeConfig;
 use slide_server::identity::from_connection;
+use slide_server::node_state::NodeStateRepository;
 use slide_server::protocol::{
     NodeState, ReadRequest, read_request, response_for_request, unsupported_version_response,
 };
-use slide_server::{database, tls};
+use slide_server::tls;
 
 fn main() -> io::Result<()> {
     let config = NodeConfig::from_args(env::args().skip(1))?;
     let runtime = tokio::runtime::Runtime::new()?;
-    let repository =
-        Arc::new(runtime.block_on(database::NodeStateRepository::open(&config.node_name))?);
+    let repository = Arc::new(runtime.block_on(NodeStateRepository::open(&config.node_name))?);
     let runtime_handle = runtime.handle().clone();
     let tls_config = tls::load_server_config(
         &config.certificate_path,
@@ -112,7 +112,7 @@ fn handle_connection(
     tls_config: &Arc<rustls::ServerConfig>,
     state: &Arc<NodeState>,
     authorization: &Arc<AuthorizationPolicy>,
-    repository: &Arc<database::NodeStateRepository>,
+    repository: &Arc<NodeStateRepository>,
     runtime_handle: &tokio::runtime::Handle,
 ) -> io::Result<()> {
     let connection = ServerConnection::new(tls_config.clone())

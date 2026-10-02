@@ -1,4 +1,4 @@
-use slide_server::database::NodeStateRepository;
+use slide_server::node_state::NodeStateRepository;
 
 #[tokio::test(flavor = "current_thread")]
 async fn repository_creates_and_reads_identity() {

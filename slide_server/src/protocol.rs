@@ -4,8 +4,8 @@ use std::time::Instant;
 use serde::Serialize;
 
 use crate::authorization::{AuthorizationPolicy, Permission};
-use crate::database::NodeIdentity;
 use crate::identity::AuthenticatedClient;
+use crate::node_state::NodeIdentity;
 
 const MAX_HEADER_LINE_BYTES: u64 = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 32 * 1024;

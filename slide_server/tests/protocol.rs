@@ -2,8 +2,8 @@ use std::io::Cursor;
 use std::time::Instant;
 
 use slide_server::authorization::AuthorizationPolicy;
-use slide_server::database::NodeIdentity;
 use slide_server::identity::AuthenticatedClient;
+use slide_server::node_state::NodeIdentity;
 use slide_server::protocol::{
     Method, NodeState, ReadRequest, Request, Target, read_request, response_for_request,
 };
