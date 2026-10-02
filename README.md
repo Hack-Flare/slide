@@ -152,6 +152,17 @@ Consensus state determines the primary, and the CNAME is updated after a success
 Nodes can join a fleet dynamically.
 A newly joined node is registered as a voting follower until the election system assigns another role.
 
+Nodes request membership through the authenticated `POST /cluster/join` operation:
+```json
+{
+  "node_id": "node-id",
+  "node_name": "three.eu.slide.hackflare.net"
+}
+```
+
+The first node bootstraps as the primary.
+Later join requests must be handled by the current primary and return the new member, the current membership list, and the quorum size.
+
 Fleet membership currently does not support leaving.
 The leave operation is deliberately disabled until membership removal, quorum changes, and primary failover behavior are fully defined.
 

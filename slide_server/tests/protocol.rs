@@ -37,6 +37,7 @@ fn request(method: Method, target: Target) -> Request {
         target,
         protocol_version: 1,
         request_id: None,
+        join: None,
     }
 }
 
@@ -71,6 +72,21 @@ fn unsupported_version_is_rejected() {
         read_request(&mut request).expect("valid request"),
         ReadRequest::UnsupportedVersion
     ));
+}
+
+#[test]
+fn join_request_decodes_typed_body() {
+    let mut request = Cursor::new(
+        b"POST /cluster/join HTTP/1.1\r\nConnection: connect-me-please\r\nSlide-Versions: 1\r\nContent-Length: 51\r\n\r\n{\"node_id\":\"joining-id\",\"node_name\":\"joining-node\"}",
+    );
+
+    let ReadRequest::Accepted(request) = read_request(&mut request).expect("valid request") else {
+        panic!("join request was not accepted");
+    };
+    let join = request.join.expect("join body");
+
+    assert_eq!(join.node_id, "joining-id");
+    assert_eq!(join.node_name, "joining-node");
 }
 
 #[test]
@@ -149,6 +165,7 @@ fn request_id_is_returned_in_response() {
         target: Target::Health,
         protocol_version: 1,
         request_id: Some("request-123".to_owned()),
+        join: None,
     };
     let response = response_for_request(
         &request,

@@ -19,8 +19,13 @@ impl NodeStateRepository {
         };
         repository.ensure_identity(node_name).await?;
         let identity = repository.node_identity().await?;
+        let role = if repository.members().await?.is_empty() {
+            NodeRole::Primary
+        } else {
+            NodeRole::Follower
+        };
         repository
-            .join(&identity.node_id, &identity.node_name)
+            .register(&identity.node_id, &identity.node_name, role)
             .await?;
 
         Ok(repository)
@@ -35,6 +40,15 @@ impl NodeStateRepository {
     }
 
     pub async fn join(&self, node_id: &str, node_name: &str) -> io::Result<ClusterMember> {
+        self.register(node_id, node_name, NodeRole::Follower).await
+    }
+
+    async fn register(
+        &self,
+        node_id: &str,
+        node_name: &str,
+        role: NodeRole,
+    ) -> io::Result<ClusterMember> {
         if let Some(member) = self
             .client
             .select::<Option<ClusterMember>>(("cluster_member", node_id))
@@ -47,7 +61,7 @@ impl NodeStateRepository {
         let member = ClusterMember {
             node_id: node_id.to_owned(),
             node_name: node_name.to_owned(),
-            role: NodeRole::Follower,
+            role,
             voting: true,
         };
         self.client

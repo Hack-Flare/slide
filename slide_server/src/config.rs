@@ -107,6 +107,6 @@ fn print_help() {
            --key PATH        Server private key in PEM format\n\
            --client-ca PATH  CA certificate for verifying client certificates\n\
          Authorization options:\n\
-           --allow-client FINGERPRINT  Grant status read access"
+           --allow-client FINGERPRINT  Grant status and membership access"
     );
 }

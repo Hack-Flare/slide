@@ -6,6 +6,7 @@ use crate::identity::AuthenticatedClient;
 #[derive(Clone, Copy)]
 pub enum Permission {
     ReadStatus,
+    ManageMembership,
 }
 
 pub struct AuthorizationPolicy {
@@ -22,6 +23,9 @@ impl AuthorizationPolicy {
     pub fn allows(&self, client: &AuthenticatedClient, permission: Permission) -> bool {
         match permission {
             Permission::ReadStatus => self
+                .status_readers
+                .contains(&client.certificate_fingerprint),
+            Permission::ManageMembership => self
                 .status_readers
                 .contains(&client.certificate_fingerprint),
         }

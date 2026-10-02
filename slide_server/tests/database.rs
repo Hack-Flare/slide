@@ -32,15 +32,29 @@ async fn separate_memory_databases_have_separate_identities() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn joining_adds_a_voting_follower() {
+async fn opening_a_fleet_bootstraps_a_voting_primary() {
     let repository = NodeStateRepository::open("local")
         .await
         .expect("database opens");
     let members = repository.members().await.expect("members are readable");
 
     assert_eq!(members.len(), 1);
-    assert!(matches!(members[0].role, NodeRole::Follower));
+    assert!(matches!(members[0].role, NodeRole::Primary));
     assert!(members[0].voting);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn joining_adds_a_voting_follower() {
+    let repository = NodeStateRepository::open("primary")
+        .await
+        .expect("database opens");
+    let member = repository
+        .join("joining-node-id", "joining-node")
+        .await
+        .expect("node joins");
+
+    assert!(matches!(member.role, NodeRole::Follower));
+    assert!(member.voting);
 }
 
 #[tokio::test(flavor = "current_thread")]

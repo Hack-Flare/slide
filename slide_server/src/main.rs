@@ -15,9 +15,10 @@ use signal_hook::iterator::Signals;
 use slide_server::authorization::AuthorizationPolicy;
 use slide_server::config::NodeConfig;
 use slide_server::identity::from_connection;
-use slide_server::node_state::NodeStateRepository;
+use slide_server::node_state::{NodeRole, NodeStateRepository};
 use slide_server::protocol::{
-    NodeState, ReadRequest, read_request, response_for_request, unsupported_version_response,
+    Method, NodeState, ReadRequest, Target, forbidden_response, membership_response,
+    not_primary_response, read_request, response_for_request, unsupported_version_response,
 };
 use slide_server::tls;
 
@@ -135,14 +136,42 @@ fn handle_connection(
     };
     let identity = runtime_handle.block_on(repository.node_identity())?;
     let member = runtime_handle.block_on(repository.member(&identity.node_id))?;
-    let response = response_for_request(
-        &request,
-        state,
-        &identity,
-        member.role,
-        &client,
-        authorization,
-    )?;
+    let response = if matches!(&request.target, Target::Join) {
+        if !matches!(&request.method, Method::Post) {
+            response_for_request(
+                &request,
+                state,
+                &identity,
+                member.role,
+                &client,
+                authorization,
+            )?
+        } else if !matches!(member.role, NodeRole::Primary) {
+            not_primary_response(&request)?
+        } else if !authorization.allows(
+            &client,
+            slide_server::authorization::Permission::ManageMembership,
+        ) {
+            forbidden_response(&request)?
+        } else {
+            let join = request.join.as_ref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "join body is missing")
+            })?;
+            let joined =
+                runtime_handle.block_on(repository.join(&join.node_id, &join.node_name))?;
+            let members = runtime_handle.block_on(repository.members())?;
+            membership_response(&request, joined, members)?
+        }
+    } else {
+        response_for_request(
+            &request,
+            state,
+            &identity,
+            member.role,
+            &client,
+            authorization,
+        )?
+    };
     stream.write_all(response.as_bytes())?;
     stream.flush()
 }

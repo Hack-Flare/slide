@@ -1,16 +1,18 @@
 use std::io::{self, BufRead, Read};
 use std::time::Instant;
 
+use serde::Deserialize;
 use serde::Serialize;
 
 use crate::authorization::{AuthorizationPolicy, Permission};
 use crate::identity::AuthenticatedClient;
-use crate::node_state::{NodeIdentity, NodeRole};
+use crate::node_state::{ClusterMember, NodeIdentity, NodeRole, quorum_size};
 
 const MAX_HEADER_LINE_BYTES: u64 = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_HEADER_COUNT: usize = 64;
 const SLIDE_CONNECTION_TOKEN: &str = "connect-me-please";
+const MAX_REQUEST_BODY_BYTES: usize = 16 * 1024;
 pub const SUPPORTED_PROTOCOL_VERSIONS: &[u16] = &[1];
 
 pub enum ReadRequest {
@@ -24,16 +26,25 @@ pub struct Request {
     pub target: Target,
     pub protocol_version: u16,
     pub request_id: Option<String>,
+    pub join: Option<JoinRequest>,
+}
+
+#[derive(Deserialize)]
+pub struct JoinRequest {
+    pub node_id: String,
+    pub node_name: String,
 }
 
 pub enum Method {
     Get,
+    Post,
     Other,
 }
 
 pub enum Target {
     Health,
     Status,
+    Join,
     Other,
 }
 
@@ -50,6 +61,7 @@ pub fn read_request(reader: &mut impl BufRead) -> io::Result<ReadRequest> {
     let mut slide_handshake = false;
     let mut client_versions = Vec::new();
     let mut request_id = None;
+    let mut content_length = 0;
 
     loop {
         let mut header_line = String::new();
@@ -101,6 +113,19 @@ pub fn read_request(reader: &mut impl BufRead) -> io::Result<ReadRequest> {
             }
             request_id = Some(value.to_owned());
         }
+        if let Some((name, value)) = header_line.split_once(':')
+            && name.trim().eq_ignore_ascii_case("content-length")
+        {
+            content_length = value.trim().parse::<usize>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid Content-Length header")
+            })?;
+            if content_length > MAX_REQUEST_BODY_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "request body is too large",
+                ));
+            }
+        }
     }
 
     if !slide_handshake {
@@ -114,10 +139,13 @@ pub fn read_request(reader: &mut impl BufRead) -> io::Result<ReadRequest> {
         return Ok(ReadRequest::UnsupportedVersion);
     };
 
+    let mut body = vec![0; content_length];
+    reader.read_exact(&mut body)?;
     Ok(ReadRequest::Accepted(Request::parse(
         &request_line,
         protocol_version,
         request_id,
+        body,
     )?))
 }
 
@@ -143,10 +171,12 @@ impl Request {
         request_line: &str,
         protocol_version: u16,
         request_id: Option<String>,
+        body: Vec<u8>,
     ) -> io::Result<Self> {
         let mut parts = request_line.split_whitespace();
         let method = match parts.next() {
             Some("GET") => Method::Get,
+            Some("POST") => Method::Post,
             Some(_) => Method::Other,
             None => {
                 return Err(io::Error::new(
@@ -158,6 +188,7 @@ impl Request {
         let target = match parts.next() {
             Some("/health") => Target::Health,
             Some("/status") => Target::Status,
+            Some("/cluster/join") => Target::Join,
             Some(_) => Target::Other,
             None => {
                 return Err(io::Error::new(
@@ -167,11 +198,20 @@ impl Request {
             }
         };
 
+        let is_join = matches!(&target, Target::Join);
         Ok(Self {
             method,
             target,
             protocol_version,
             request_id,
+            join: if is_join {
+                Some(
+                    serde_json::from_slice(&body)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+                )
+            } else {
+                None
+            },
         })
     }
 }
@@ -219,7 +259,7 @@ pub fn response_for_request(
                 error: ProtocolError::new(ErrorCode::NotFound, "request target was not found"),
             },
         ),
-        (Method::Other, _) => http_response(
+        (Method::Get, Target::Join) | (Method::Post, _) | (Method::Other, _) => http_response(
             request,
             405,
             ResponseBody::Error {
@@ -227,6 +267,43 @@ pub fn response_for_request(
             },
         ),
     }
+}
+
+pub fn forbidden_response(request: &Request) -> io::Result<String> {
+    http_response(
+        request,
+        403,
+        ResponseBody::Error {
+            error: ProtocolError::new(ErrorCode::Forbidden, "client is not authorized"),
+        },
+    )
+}
+
+pub fn not_primary_response(request: &Request) -> io::Result<String> {
+    http_response(
+        request,
+        409,
+        ResponseBody::Error {
+            error: ProtocolError::new(ErrorCode::NotPrimary, "this node is not primary"),
+        },
+    )
+}
+
+pub fn membership_response(
+    request: &Request,
+    member: ClusterMember,
+    members: Vec<ClusterMember>,
+) -> io::Result<String> {
+    let voting_members = members.iter().filter(|member| member.voting).count();
+    http_response(
+        request,
+        200,
+        ResponseBody::Membership {
+            member,
+            members,
+            quorum_size: quorum_size(voting_members),
+        },
+    )
 }
 
 #[derive(Serialize)]
@@ -241,6 +318,11 @@ enum ResponseBody {
         role: String,
         uptime_seconds: u64,
         client_certificate_fingerprint: String,
+    },
+    Membership {
+        member: ClusterMember,
+        members: Vec<ClusterMember>,
+        quorum_size: usize,
     },
     Error {
         error: ProtocolError,
@@ -268,6 +350,7 @@ enum ErrorCode {
     Forbidden,
     MethodNotAllowed,
     NotFound,
+    NotPrimary,
     UnsupportedVersion,
 }
 
