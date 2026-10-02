@@ -4,6 +4,8 @@ use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, Mem};
 
 const MIGRATIONS: &str = include_str!("../../database/migrations/0001_node_identity.surql");
+const MEMBERSHIP_MIGRATION: &str =
+    include_str!("../../database/migrations/0002_cluster_members.surql");
 
 pub async fn open() -> io::Result<Surreal<Db>> {
     let client = Surreal::new::<Mem>(()).await.map_err(database_error)?;
@@ -13,6 +15,10 @@ pub async fn open() -> io::Result<Surreal<Db>> {
         .await
         .map_err(database_error)?;
     client.query(MIGRATIONS).await.map_err(database_error)?;
+    client
+        .query(MEMBERSHIP_MIGRATION)
+        .await
+        .map_err(database_error)?;
 
     Ok(client)
 }

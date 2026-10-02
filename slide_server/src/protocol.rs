@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::authorization::{AuthorizationPolicy, Permission};
 use crate::identity::AuthenticatedClient;
-use crate::node_state::NodeIdentity;
+use crate::node_state::{NodeIdentity, NodeRole};
 
 const MAX_HEADER_LINE_BYTES: u64 = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
@@ -180,6 +180,7 @@ pub fn response_for_request(
     request: &Request,
     state: &NodeState,
     identity: &NodeIdentity,
+    role: NodeRole,
     client: &AuthenticatedClient,
     policy: &AuthorizationPolicy,
 ) -> io::Result<String> {
@@ -198,6 +199,7 @@ pub fn response_for_request(
                 ResponseBody::Status {
                     node_id: identity.node_id.clone(),
                     node_name: identity.node_name.clone(),
+                    role: role.as_str().to_owned(),
                     uptime_seconds: state.started_at.elapsed().as_secs(),
                     client_certificate_fingerprint: client.certificate_fingerprint.clone(),
                 },
@@ -236,6 +238,7 @@ enum ResponseBody {
     Status {
         node_id: String,
         node_name: String,
+        role: String,
         uptime_seconds: u64,
         client_certificate_fingerprint: String,
     },

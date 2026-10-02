@@ -6,6 +6,7 @@ use surrealdb::engine::local::Db;
 use crate::database;
 
 use super::NodeIdentity;
+use super::membership::{ClusterMember, NodeRole};
 
 pub struct NodeStateRepository {
     client: Surreal<Db>,
@@ -17,6 +18,10 @@ impl NodeStateRepository {
             client: database::open().await?,
         };
         repository.ensure_identity(node_name).await?;
+        let identity = repository.node_identity().await?;
+        repository
+            .join(&identity.node_id, &identity.node_name)
+            .await?;
 
         Ok(repository)
     }
@@ -27,6 +32,53 @@ impl NodeStateRepository {
             .await
             .map_err(database_error)?
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "node identity is missing"))
+    }
+
+    pub async fn join(&self, node_id: &str, node_name: &str) -> io::Result<ClusterMember> {
+        if let Some(member) = self
+            .client
+            .select::<Option<ClusterMember>>(("cluster_member", node_id))
+            .await
+            .map_err(database_error)?
+        {
+            return Ok(member);
+        }
+
+        let member = ClusterMember {
+            node_id: node_id.to_owned(),
+            node_name: node_name.to_owned(),
+            role: NodeRole::Follower,
+            voting: true,
+        };
+        self.client
+            .create::<Option<ClusterMember>>(("cluster_member", node_id))
+            .content(member.clone())
+            .await
+            .map_err(database_error)?;
+
+        Ok(member)
+    }
+
+    pub async fn members(&self) -> io::Result<Vec<ClusterMember>> {
+        self.client
+            .select::<Vec<ClusterMember>>("cluster_member")
+            .await
+            .map_err(database_error)
+    }
+
+    pub async fn member(&self, node_id: &str) -> io::Result<ClusterMember> {
+        self.client
+            .select::<Option<ClusterMember>>(("cluster_member", node_id))
+            .await
+            .map_err(database_error)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "cluster member is missing"))
+    }
+
+    pub async fn leave(&self, _node_id: &str) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "leaving a fleet is disabled",
+        ))
     }
 
     async fn ensure_identity(&self, node_name: &str) -> io::Result<()> {

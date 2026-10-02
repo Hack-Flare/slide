@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use slide_server::authorization::AuthorizationPolicy;
 use slide_server::identity::AuthenticatedClient;
-use slide_server::node_state::NodeIdentity;
+use slide_server::node_state::{NodeIdentity, NodeRole};
 use slide_server::protocol::{
     Method, NodeState, ReadRequest, Request, Target, read_request, response_for_request,
 };
@@ -79,6 +79,7 @@ fn health_endpoint_returns_ok() {
         &request(Method::Get, Target::Health),
         &state(),
         &identity(),
+        NodeRole::Follower,
         &client(),
         &policy(),
     )
@@ -94,6 +95,7 @@ fn status_endpoint_includes_node_name() {
         &request(Method::Get, Target::Status),
         &state(),
         &identity(),
+        NodeRole::Follower,
         &client(),
         &policy(),
     )
@@ -102,6 +104,7 @@ fn status_endpoint_includes_node_name() {
     assert!(response.contains("\"type\":\"status\""));
     assert!(response.contains("\"node_id\":\"test-id\""));
     assert!(response.contains("\"node_name\":\"test-node\""));
+    assert!(response.contains("\"role\":\"follower\""));
     assert!(response.contains("\"uptime_seconds\":"));
     assert!(response.contains("\"client_certificate_fingerprint\":\"test-fingerprint\""));
 }
@@ -112,6 +115,7 @@ fn unknown_path_returns_not_found() {
         &request(Method::Get, Target::Other),
         &state(),
         &identity(),
+        NodeRole::Follower,
         &client(),
         &policy(),
     )
@@ -129,6 +133,7 @@ fn unauthorized_status_returns_forbidden() {
         &request(Method::Get, Target::Status),
         &state(),
         &identity(),
+        NodeRole::Follower,
         &client,
         &policy(),
     )
@@ -145,8 +150,15 @@ fn request_id_is_returned_in_response() {
         protocol_version: 1,
         request_id: Some("request-123".to_owned()),
     };
-    let response = response_for_request(&request, &state(), &identity(), &client(), &policy())
-        .expect("response serializes");
+    let response = response_for_request(
+        &request,
+        &state(),
+        &identity(),
+        NodeRole::Follower,
+        &client(),
+        &policy(),
+    )
+    .expect("response serializes");
 
     assert!(response.contains("Slide-Request-Id: request-123\r\n"));
 }

@@ -134,7 +134,15 @@ fn handle_connection(
         }
     };
     let identity = runtime_handle.block_on(repository.node_identity())?;
-    let response = response_for_request(&request, state, &identity, &client, authorization)?;
+    let member = runtime_handle.block_on(repository.member(&identity.node_id))?;
+    let response = response_for_request(
+        &request,
+        state,
+        &identity,
+        member.role,
+        &client,
+        authorization,
+    )?;
     stream.write_all(response.as_bytes())?;
     stream.flush()
 }

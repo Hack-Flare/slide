@@ -147,6 +147,14 @@ It becomes a follower, rejects primary-only requests, and informs callers of the
 The DNS CNAME is a discovery and routing aid, not the source of truth for elections.
 Consensus state determines the primary, and the CNAME is updated after a successful election.
 
+## Cluster membership
+
+Nodes can join a fleet dynamically.
+A newly joined node is registered as a voting follower until the election system assigns another role.
+
+Fleet membership currently does not support leaving.
+The leave operation is deliberately disabled until membership removal, quorum changes, and primary failover behavior are fully defined.
+
 ## Port
 
 `slided` listens on `TCP/1`.  
