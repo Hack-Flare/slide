@@ -1,10 +1,3 @@
-mod authorization;
-mod config;
-mod database;
-mod identity;
-mod protocol;
-mod tls;
-
 use std::env;
 use std::io::{self, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -19,12 +12,13 @@ use rustls::{ServerConnection, StreamOwned};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
-use crate::authorization::AuthorizationPolicy;
-use crate::config::NodeConfig;
-use crate::identity::from_connection;
-use crate::protocol::{
+use slide_server::authorization::AuthorizationPolicy;
+use slide_server::config::NodeConfig;
+use slide_server::identity::from_connection;
+use slide_server::protocol::{
     NodeState, ReadRequest, read_request, response_for_request, unsupported_version_response,
 };
+use slide_server::{database, tls};
 
 fn main() -> io::Result<()> {
     let config = NodeConfig::from_args(env::args().skip(1))?;
