@@ -55,7 +55,7 @@ Clients conenct directly to slide nodes after discovering them through DNS.
                    Slide client
 ```
 
-A seperate always-online central controller is not required and is not intended.
+A permanently online central controller is not required. Slide uses an elected primary server for fleet-wide coordination, and the primary role can move between nodes.
 
 ## Node naming
 
@@ -106,6 +106,46 @@ It can then:
 3. Authenticate to said nodes.
 4. Query node capabilities and state.
 5. Manage deployments, rolling releases, and other operations.
+
+## Primary server
+
+A Slide fleet has one elected primary server at a time.
+The primary coordinates fleet-wide operations and acts as the authoritative coordination point for clients.
+
+The primary is addressed through:
+```
+primary.slide.hackflare.net
+```
+
+This name is a CNAME to the currently elected node:
+```
+primary.slide.hackflare.net. CNAME one.eu.slide.hackflare.net.
+```
+
+If the primary becomes unavailable, the fleet elects a replacement from its nodes.
+An election requires a quorum, meaning a strict majority of the participating fleet must agree on the new primary.
+A fleet must not elect or advertise a primary without quorum.
+
+Elections use a monotonically increasing term.
+Nodes reject stale primary state from an older term, which prevents a disconnected primary from continuing to make authoritative changes after a replacement has been elected.
+
+When an old primary returns, it must first synchronize with the fleet.
+It becomes a follower, rejects primary-only requests, and informs callers of the current primary and election term:
+
+```json
+{
+  "type": "error",
+  "error": {
+    "code": "not_primary",
+    "message": "this node is no longer primary",
+    "primary": "one.eu.slide.hackflare.net",
+    "term": 42
+  }
+}
+```
+
+The DNS CNAME is a discovery and routing aid, not the source of truth for elections.
+Consensus state determines the primary, and the CNAME is updated after a successful election.
 
 ## Port
 
