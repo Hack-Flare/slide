@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use slide_server::authorization::AuthorizationPolicy;
 use slide_server::identity::AuthenticatedClient;
-use slide_server::node_state::{NodeIdentity, NodeRole};
+use slide_server::node_state::{ElectionState, NodeIdentity, NodeRole};
 use slide_server::protocol::{
     Method, NodeState, ReadRequest, Request, Target, read_request, response_for_request,
 };
@@ -18,6 +18,14 @@ fn identity() -> NodeIdentity {
     NodeIdentity {
         node_id: "test-id".to_owned(),
         node_name: "test-node".to_owned(),
+    }
+}
+
+fn election() -> ElectionState {
+    ElectionState {
+        current_term: 0,
+        voted_for: None,
+        leader_id: None,
     }
 }
 
@@ -96,6 +104,7 @@ fn health_endpoint_returns_ok() {
         &state(),
         &identity(),
         NodeRole::Follower,
+        &election(),
         &client(),
         &policy(),
     )
@@ -112,6 +121,7 @@ fn status_endpoint_includes_node_name() {
         &state(),
         &identity(),
         NodeRole::Follower,
+        &election(),
         &client(),
         &policy(),
     )
@@ -132,6 +142,7 @@ fn unknown_path_returns_not_found() {
         &state(),
         &identity(),
         NodeRole::Follower,
+        &election(),
         &client(),
         &policy(),
     )
@@ -150,6 +161,7 @@ fn unauthorized_status_returns_forbidden() {
         &state(),
         &identity(),
         NodeRole::Follower,
+        &election(),
         &client,
         &policy(),
     )
@@ -172,6 +184,7 @@ fn request_id_is_returned_in_response() {
         &state(),
         &identity(),
         NodeRole::Follower,
+        &election(),
         &client(),
         &policy(),
     )

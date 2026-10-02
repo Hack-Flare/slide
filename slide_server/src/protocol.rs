@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::authorization::{AuthorizationPolicy, Permission};
 use crate::identity::AuthenticatedClient;
-use crate::node_state::{ClusterMember, NodeIdentity, NodeRole, quorum_size};
+use crate::node_state::{ClusterMember, ElectionState, NodeIdentity, NodeRole, quorum_size};
 
 const MAX_HEADER_LINE_BYTES: u64 = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
@@ -221,6 +221,7 @@ pub fn response_for_request(
     state: &NodeState,
     identity: &NodeIdentity,
     role: NodeRole,
+    election: &ElectionState,
     client: &AuthenticatedClient,
     policy: &AuthorizationPolicy,
 ) -> io::Result<String> {
@@ -240,6 +241,8 @@ pub fn response_for_request(
                     node_id: identity.node_id.clone(),
                     node_name: identity.node_name.clone(),
                     role: role.as_str().to_owned(),
+                    current_term: election.current_term,
+                    leader_id: election.leader_id.clone(),
                     uptime_seconds: state.started_at.elapsed().as_secs(),
                     client_certificate_fingerprint: client.certificate_fingerprint.clone(),
                 },
@@ -316,6 +319,8 @@ enum ResponseBody {
         node_id: String,
         node_name: String,
         role: String,
+        current_term: u64,
+        leader_id: Option<String>,
         uptime_seconds: u64,
         client_certificate_fingerprint: String,
     },

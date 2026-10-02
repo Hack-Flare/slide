@@ -1,4 +1,4 @@
-use slide_server::node_state::{NodeRole, NodeStateRepository, quorum_size};
+use slide_server::node_state::{NodeRole, NodeStateRepository, has_quorum, quorum_size};
 
 #[tokio::test(flavor = "current_thread")]
 async fn repository_creates_and_reads_identity() {
@@ -77,4 +77,34 @@ fn quorum_requires_a_strict_majority() {
     assert_eq!(quorum_size(2), 2);
     assert_eq!(quorum_size(3), 2);
     assert_eq!(quorum_size(4), 3);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_voting_member_can_only_vote_once_per_term() {
+    let repository = NodeStateRepository::open("local")
+        .await
+        .expect("database opens");
+    let identity = repository.node_identity().await.expect("identity exists");
+    repository
+        .join("different-candidate", "different-candidate")
+        .await
+        .expect("candidate joins");
+    assert!(
+        repository
+            .request_vote(&identity.node_id, 1)
+            .await
+            .expect("vote succeeds")
+    );
+    assert!(
+        !repository
+            .request_vote("different-candidate", 1)
+            .await
+            .expect("second candidate is known")
+    );
+}
+
+#[test]
+fn election_requires_a_majority_of_votes() {
+    assert!(has_quorum(3, 2));
+    assert!(!has_quorum(3, 1));
 }

@@ -136,6 +136,7 @@ fn handle_connection(
     };
     let identity = runtime_handle.block_on(repository.node_identity())?;
     let member = runtime_handle.block_on(repository.member(&identity.node_id))?;
+    let election = runtime_handle.block_on(repository.election_state())?;
     let response = if matches!(&request.target, Target::Join) {
         if !matches!(&request.method, Method::Post) {
             response_for_request(
@@ -143,6 +144,7 @@ fn handle_connection(
                 state,
                 &identity,
                 member.role,
+                &election,
                 &client,
                 authorization,
             )?
@@ -168,6 +170,7 @@ fn handle_connection(
             state,
             &identity,
             member.role,
+            &election,
             &client,
             authorization,
         )?
