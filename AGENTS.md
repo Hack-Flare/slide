@@ -23,13 +23,6 @@ Use this file as the default guide for AI agents working in the repository.
   - If you are editing documentation that already has em dashes, replace them with hyphens.
 - No unnecessary crate dependencies, this repository is intended to be minimal and self-contained.
 
-## Repository Layout
-
-- `slide_server`: The Slide server implementation.
-- `slide_client`: The Slide client implementation.
-
-Read the relevant crate's source before relying on documentation for implementation details.
-
 ## Code Conventions
 
 - Keep logic near the module that owns it.

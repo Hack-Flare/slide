@@ -1,9 +1,0 @@
-[workspace]
-resolver = "3"
-members = [
-  "slide_client",
-  "slide_server"
-]
-
-[workspace.lints.clippy]
-unwrap_used = "deny"

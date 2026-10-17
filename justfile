@@ -24,4 +24,4 @@ check: fmt-check lint test
 
 # Run dev
 dev:
-  cargo run -p slide_server -- --dev
+  cargo run -p server -- --dev
