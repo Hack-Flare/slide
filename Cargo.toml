@@ -1,0 +1,8 @@
+[workspace]
+resolver = "3"
+members = ["client",
+    "proxy", "server",
+]
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
